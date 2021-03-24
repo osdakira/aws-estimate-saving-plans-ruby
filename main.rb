@@ -1,25 +1,26 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'optparse'
 
 require 'faraday'
 require 'aws-sdk-ec2'
 require 'pry'
 
 class Main
-  attr_reader :region_code, :region_abbr, :discounted_usage_type_suffix
+  attr_reader :region_code, :region_abbr, :discounted_usage_type_suffix, :opts
 
   def initialize
-    @region_code = 'ap-northeast-1'
-    @region_abbr = 'APN1'
-
-    @discounted_usage_type_suffix = '-BoxUsage'
+    @opts, _args = parse_options
+    @region_code = opts[:region_code]
+    @region_abbr = opts[:region_abbr]
+    @discounted_usage_type_suffix = opts[:discounted_usage_type_suffix]
   end
 
   def call
-    instances = Ec2Fetcher.new(region_code).fetch_ondemand_running_instances
+    instances = Ec2Fetcher.new(opts).fetch_ondemand_running_instances
 
-    saving_plans = ComputeSavingsPlansFetcher.new(region_code).fetch_savings_plans
+    saving_plans = ComputeSavingsPlansFetcher.new(opts).fetch_savings_plans
     instane_type_to_price = saving_plans.map { |x| [x["discountedUsageType"], x.dig('discountedRate', 'price')] }.to_h
 
     # instane_type_to_price = {"APN1-BoxUsage:r5a.xlarge"=>"0.185",...
@@ -36,13 +37,35 @@ class Main
     puts instances_prices.sort.map { |x| x.join(',') }
     puts instances_prices.map { |x| x[2].to_f }.sum
   end
+
+  def parse_options
+    opts = {
+      region_code: 'ap-northeast-1',
+      region_abbr: 'APN1',
+      discounted_usage_type_suffix: '-BoxUsage',
+      product_family: 'ComputeSavingsPlans',
+      usage_type: 'ComputeSP:1yrAllUpfront',
+      discounted_operation: 'RunInstances', # linux
+    }
+
+    op = OptionParser.new
+    opts.each do |key, value|
+      op.on("--#{key}", "default value: #{value}") { |v| opts[key] = v }
+    end
+    args = op.parse(ARGV)
+    [opts, args]
+  rescue OptionParser::InvalidOption => e
+    puts op.to_s
+    puts "error: #{e.message}" if e.message
+    exit 1
+  end
 end
 
 class Ec2Fetcher
   attr_reader :region_code
 
-  def initialize(region_code)
-    @region_code = region_code
+  def initialize(opts)
+    @region_code = opts[:region_code]
   end
 
   def fetch_ondemand_running_instances
@@ -63,13 +86,13 @@ end
 class ComputeSavingsPlansFetcher
   attr_reader :region_code, :priging_base_url, :product_family, :usage_type, :discounted_operation
 
-  def initialize(region_code)
-    @region_code = region_code
+  def initialize(opts)
     @priging_base_url = 'https://pricing.us-east-1.amazonaws.com'
 
-    @product_family = 'ComputeSavingsPlans'
-    @usage_type = 'ComputeSP:1yrAllUpfront'
-    @discounted_operation = 'RunInstances' # linux
+    @region_code = opts[:region_code]
+    @product_family = opts[:product_family]
+    @usage_type = opts[:usage_type]
+    @discounted_operation = opts[:discounted_operation]
   end
 
   def fetch_savings_plans
